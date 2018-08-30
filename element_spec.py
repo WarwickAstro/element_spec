@@ -28,10 +28,10 @@ parser.add_argument("-s", "--scale", type=float, default=1., \
   help="Rescale model by factor")
 parser.add_argument("--res", type=float, default=2.0, \
   help="Model resolution [\AA] (default=2.0)")
-parser.add_argument("-wl", type=float, default=2.0, \
-  help="Lorentzian width [\AA] (default=2.0)")
+parser.add_argument("-wl", type=float, default=0.5, \
+  help="Lorentzian width [\AA] (default=0.5)")
 parser.add_argument("-gb", type=float, default=-1.0, \
-  help="Gaussian blur spectrum [\AA]")
+  help="Gaussian blur data [\AA]")
 parser.add_argument("--norm", type=str, default="BB", choices=["BB","unit"], \
   help="normalisation: BB (def), unit")
 parser.add_argument("--model", type=bool, default=False, \
@@ -51,18 +51,27 @@ beta = 1/(0.695*args.Teff)
 #.............................................................................
 # methods
 
-def lorentzian(x, x0, wl):
-  return 1/(np.pi*wl*(1+((x-x0)/wl)**2))
+def lorentzian(x, x0, w):
+  """
+  Unit-normed Lorentzian profile. w=FWHM
+  """
+  return 1/(np.pi*w*(1+(0.5*(x-x0)/w)**2))
 
 def line_profile(x, linedata, wl):
+  """
+  Creates line profile for a single line
+  """
   boltz = math.exp(-beta*linedata['E_low'])
-  gf = 10**(0.5*linedata['loggf'])
+  gf = 10**(linedata['loggf'])
   calc_x = np.abs(x-linedata['lambda']) < 10*wl
   V = np.zeros_like(x)
   V[calc_x] = lorentzian(x[calc_x], linedata['lambda'], wl)
   return  gf * boltz * V
 
 def model(p, x):
+  """
+  Creates absorption profile from combination of lines
+  """
   A, wl = p
   LL = sum(line_profile(x, linedata, wl) for linedata in Linedata)
   return np.exp(-A*LL)
@@ -135,28 +144,29 @@ Linedata = Linedata[strongest]
 model_wave = "vac" if args.model or args.wave=="vac" else "air"
 xm = np.arange(S.x[0], S.x[-1], 0.1)
 ym = model((args.Au, args.wl), xm)
-M = Spectrum(xm, ym, np.zeros_like(xm), wavelengths=model_wave)
+M = Spectrum(xm, ym, np.zeros_like(xm), wave=model_wave)
 M.apply_redshift(args.rv)
 M.convolve_gaussian(args.res)
-M = normalise(M, S, args)
 
 #Load data from other ions if necessary
-if args.read:
+if args.read and not args.write:
   flist = glob.glob("LTE*.npy")
   if len(flist) > 0:
     Mr = reduce(operator.mul, (spec_from_npy(fname, args.wave) for fname in flist))
     Mr = normalise(Mr, S, args)
   else:
+    #If no models saved, don't try and plot Mr
     args.read=False
 
 if args.write:
   M.write("LTE-{}-{:.0f}.npy".format(args.El, args.Teff))
 else:
+  M = normalise(M, S, args)
   plt.figure(figsize=(12,6))
-  plt.plot(S.x, S.y, c='grey', drawstyle='steps-mid', zorder=1)
-  plt.plot(M.x, M.y, 'r-', zorder=3)
+  S.plot(c='grey', drawstyle='steps-mid', zorder=1)
+  M.plot('r-', zorder=3)
   if args.read:
-    plt.plot(Mr.x, Mr.y, 'C0-', zorder=2)
+    Mr.plot('C0-', zorder=2)
   plt.xlim(S.x[0], S.x[-1])
   plt.ylim(0, 1.2*np.percentile(S.y, 99))
   plt.xlabel("Wavelength [\AA]")
